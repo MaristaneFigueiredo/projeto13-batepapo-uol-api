@@ -31,37 +31,50 @@ const participantSchema = joi.object({
 const messageSchema = joi.object({
   to: joi.string().required(),
   text: joi.string().required(),
-  type: joi.any().valid("message", "private_message") // permite um ou outro
+  type: joi.any().valid("message", "private_message"), // permite um ou outro
 });
 
-
-
+// async function isParticipantExists(participant) {
+//   return (
+//     (await db.collection("participants").find({ name: participant }).toArray())
+//       .length > 0
+//   );
+// }
 // POST Participants
 app.post("/participants", async (req, res) => {
   const { name } = req.body;
 
   const validation = participantSchema.validate({ name });
 
-  if (validation.error) {    
-    res.status(422).send({ error: validation.error.details.message });
+  if (validation.error) {
+    res.status(422).send({ error: validation.error.details[0].message });
     //422: Unprocessable Entity => Significa que a requisição enviada não está no formato esperado
   }
 
-  const isParticipantExists =( await db.collection("participants").find({name:name}).toArray()  ).length > 0  
+  const isParticipantExists =
+    (await db.collection("participants").find({ name: name }).toArray())
+      .length > 0;
+
   if (isParticipantExists) {
-        res.status(409).send({error: "Participante já existe."})
-        return
-        //409: Conflict => Significa que o recurso que você está tentando inserir já foi inserido    
-    }
-
-
+    res.status(409).send({ error: "Participante já existe." });
+    return;
+    //409: Conflict => Significa que o recurso que você está tentando inserir já foi inserido
+  }
 
   try {
-    await db.collection("participants").insertOne({ name: name, lastStatus: Date.now() });
-    await db.collection("messages").insert({ from: name, to:'Todos', text:'entra na sala...', type:'status', time:dayjs().format('HH:mm:ss')})
+    await db
+      .collection("participants")
+      .insertOne({ name: name, lastStatus: Date.now() });
+    await db.collection("messages").insert({
+      from: name,
+      to: "Todos",
+      text: "entra na sala...",
+      type: "status",
+      time: dayjs().format("HH:mm:ss"),
+    });
     res.sendStatus(201);
     //201: Created => Sucesso na criação do recurso
-  } catch (error) {  
+  } catch (error) {
     res.status(500).send(error);
     //500: Internal Server Error => Significa que ocorreu algum erro desconhecido no servidor
   }
@@ -79,36 +92,56 @@ app.get("/participants", async (req, res) => {
 
 //// POST Messages
 app.post("/messages", async (req, res) => {
-  const {to, text, type} = req.body;
-  const from = req.headers.user;
+  const { to, text, type } = req.body;
+  const user = req.headers.user;
+  console.log("user", user);
 
-
-  const validation = messageSchema.validate({to, text, type}, { abortEarly: false }   );
+  const validation = messageSchema.validate(
+    { to, text, type },
+    { abortEarly: false }
+  );
   if (validation.error) {
-    const errors = validation.error.details.map((detail) => detail.message)
+    const errors = validation.error.details.map((detail) => detail.message);
     res.status(422).send(errors);
     return;
   }
 
-  const isParticipantExists =( await db.collection("participants").find({name:from}).toArray()  ).length > 0  
+  // const userParticipant = isParticipantExists(user);
+  // console.log("userParticipant", userParticipant);
+  // if (!userParticipant) {
+  //   console.log("userParticipant", userParticipant);
+  //   res.status(409).send({ error: "Participante não existe!" });
+  //   return;
+  //   //409: Conflict => Significa que o recurso que você está tentando inserir já foi inserido
+  // }
+
+  const isParticipantExists =
+    (await db.collection("participants").find({ name: user }).toArray())
+      .length > 0;
+  console.log("isParticipantExists1", isParticipantExists);
   if (!isParticipantExists) {
-        res.status(409).send({error: "Participante não existe!"})
-        return
-        //409: Conflict => Significa que o recurso que você está tentando inserir já foi inserido    
-    }
+    res.status(409).send({ error: "Participante não existe!" });
+    return;
+    //409: Conflict => Significa que o recurso que você está tentando inserir já foi inserido
+  }
 
   try {
-    await db.collection("messages").insert({ from: from, to:to, text:text, type:type, time:dayjs().format('HH:mm:ss')})
+    await db.collection("messages").insert({
+      from: user,
+      to: to,
+      text: text,
+      type: type,
+      time: dayjs().format("HH:mm:ss"),
+    });
     res.sendStatus(201);
   } catch (error) {
     res.status(500).send(error);
   }
 });
 
-
 //GET Messages
 app.get("/messages", async (req, res) => {
-  const limit = parseInt(req.query.limit)
+  const limit = parseInt(req.query.limit);
   const user = req.headers.user;
 
   /*if (limit !== 0) {
@@ -121,13 +154,40 @@ app.get("/messages", async (req, res) => {
       res.status(500).send(error);
     }
   }*/
-  
-  
+
   try {
-    const messages = await db.collection("participants").find({from: user, to:user}).toArray().reverse()
+    const messages = await db
+      .collection("participants")
+      .find({ from: user, to: user })
+      .toArray()
+      .reverse();
     res.send(messages);
   } catch (error) {
     res.status(500).send(error);
+  }
+});
+
+//POST /status
+app.post("/status", async (req, res) => {
+  try {
+    const user = req.headers.user;
+
+    const isParticipantExists =
+      (await db.collection("participants").find({ name: user }).toArray())
+        .length > 0;
+    console.log("isParticipantExists1", isParticipantExists);
+    if (!isParticipantExists) {
+      sendStatus(404);
+      return;
+    }
+
+    await db
+      .collection("participants")
+      .updateOne({ name: user }, { $set: { lastStatus: Date.now() } });
+
+    return res.sendStatus(200);
+  } catch (erro) {
+    return res.status(500).send({ message: erro });
   }
 });
 
