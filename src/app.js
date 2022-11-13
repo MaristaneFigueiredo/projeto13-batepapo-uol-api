@@ -55,6 +55,7 @@ app.post("/participants", async (req, res) => {
     (await db.collection("participants").find({ name: name }).toArray())
       .length > 0;
 
+  console.log("postParticipants", isParticipantExists);
   if (isParticipantExists) {
     res.status(409).send({ error: "Participante já existe." });
     return;
@@ -65,7 +66,7 @@ app.post("/participants", async (req, res) => {
     await db
       .collection("participants")
       .insertOne({ name: name, lastStatus: Date.now() });
-    await db.collection("messages").insert({
+    await db.collection("messages").insertOne({
       from: name,
       to: "Todos",
       text: "entra na sala...",
@@ -156,15 +157,36 @@ app.get("/messages", async (req, res) => {
   }*/
 
   try {
-    const messages = await db
-      .collection("participants")
-      .find({ from: user, to: user })
-      .toArray()
-      .reverse();
+    if (limit !== 0) {
+      const messagesActual = await db
+        .collection("participants")
+        .find({ from: user, to: user })
+        .toArray();
+
+      const messages = messagesActual.slice(-limit);
+    } else {
+      const messages = await db
+        .collection("participants")
+        .find({ from: user, to: user })
+        .toArray();
+      //.reverse();
+    }
+
     res.send(messages);
   } catch (error) {
     res.status(500).send(error);
   }
+
+  // try {
+  //   const messages = await db
+  //     .collection("participants")
+  //     .find({ from: user, to: user })
+  //     .toArray()
+  //     .reverse();
+  //   res.send(messages);
+  // } catch (error) {
+  //   res.status(500).send(error);
+  // }
 });
 
 //POST /status
@@ -190,6 +212,39 @@ app.post("/status", async (req, res) => {
     return res.status(500).send({ message: erro });
   }
 });
+
+//Remove users inativos
+async function removeParticipants() {
+  try {
+    await db
+      .collection("participants")
+      .aggregate([
+        {
+          $addFields: {
+            tempo: { $subtract: [Date.now(), "$lastStatus"] },
+          },
+        },
+      ])
+      .forEach(async (participant) => {
+        if (participant.tempo > 10000) {
+          await db
+            .collection("participants")
+            .deleteOne({ _id: participant._id });
+          await db.collection("messages").insertOne({
+            from: participant.name,
+            to: "Todos",
+            text: "sai da sala...",
+            type: "status",
+            time: dayjs().format("HH:mm:ss"),
+          });
+        }
+      });
+  } catch (erro) {
+    console.error(erro);
+  }
+}
+
+setInterval(removeParticipants, 15000);
 
 app.listen(5000, () => console.log("Server running in port 5000"));
 
