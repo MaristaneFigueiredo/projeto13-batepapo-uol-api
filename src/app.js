@@ -11,17 +11,18 @@ const app = express();
 app.use(cors());
 app.use(express.json()); // qro receber requisições via body no formato json
 dotenv.config(); // configura as variáveis de ambiente
-const conectionDataBase = new MongoClient(process.env.MONGO_URI);
-let db; //variável do banco atual
 
-// conectando a base de dados
+//Conexao ao banco
 // top-level await - await fora de funções. Funciona com o sistema de modules - (esmodules)
-try {
-  await conectionDataBase.connect();
-  db = conectionDataBase.db("batePapoUol");
-} catch (error) {
-  console.log(error);
-}
+const conexao = new MongoClient(process.env.MONGO_URI);
+await conexao
+  .connect()
+  .then(console.log("Conexão MongoDB OK"))
+  .catch((erro) => console.error(erro));
+const db = conexao.db("batePapoUol");
+
+const participantsCollection = db.collection("participants");
+const batePapoCollection = db.collection("batepapo");
 
 //Modelo desejado para o participante e messages - o objeto recebe configurações do campo
 const participantSchema = joi.object({
@@ -34,49 +35,41 @@ const messageSchema = joi.object({
   type: joi.any().valid("message", "private_message"), // permite um ou outro
 });
 
-// async function isParticipantExists(participant) {
-//   return (
-//     (await db.collection("participants").find({ name: participant }).toArray())
-//       .length > 0
-//   );
-// }
-// POST Participants
+//options método validate
+const opts = {
+  abortEarly: false,
+};
+
 app.post("/participants", async (req, res) => {
-  const { name } = req.body;
-
-  const validation = participantSchema.validate({ name });
-
-  if (validation.error) {
-    res.status(422).send({ error: validation.error.details[0].message });
-    //422: Unprocessable Entity => Significa que a requisição enviada não está no formato esperado
-  }
-
-  const isParticipantExists =
-    (await db.collection("participants").find({ name: name }).toArray())
-      .length > 0;
-
-  console.log("postParticipants", isParticipantExists);
-  if (isParticipantExists) {
-    res.status(409).send({ error: "Participante já existe." });
-    return;
-    //409: Conflict => Significa que o recurso que você está tentando inserir já foi inserido
-  }
-
   try {
-    await db
-      .collection("participants")
-      .insertOne({ name: name, lastStatus: Date.now() });
-    await db.collection("messages").insertOne({
+    const { name } = req.body;
+
+    const validation = participantSchema.validate({ name }, opts);
+    if (validation)
+      return res
+        .status(422)
+        .send({ message: error.details.map((m) => m.message) });
+    //422: Unprocessable Entity => Significa que a requisição enviada não está no formato esperado
+
+    //verificar se já existe o usuário
+    const isParticipantExists = await participantsCollection.findOne({ name });
+    if (isParticipantExists)
+      return res.status(409).send({ error: "Participante já existe." });
+    //409: Conflict => Significa que o recurso que você está tentando inserir já foi inserido
+
+    await participantsCollection.insertOne({ name, lastStatus: Date.now() });
+    await batePapoCollection.insertOne({
       from: name,
       to: "Todos",
       text: "entra na sala...",
       type: "status",
       time: dayjs().format("HH:mm:ss"),
     });
-    res.sendStatus(201);
+
+    return res.sendStatus(201);
     //201: Created => Sucesso na criação do recurso
-  } catch (error) {
-    res.status(500).send(error);
+  } catch (erro) {
+    return res.status(500).send({ message: erro });
     //500: Internal Server Error => Significa que ocorreu algum erro desconhecido no servidor
   }
 });
@@ -84,7 +77,7 @@ app.post("/participants", async (req, res) => {
 // GET Participants
 app.get("/participants", async (req, res) => {
   try {
-    const participants = await db.collection("participants").find().toArray();
+    const participants = await participantsCollection.find({}).toArray();
     res.send(participants);
   } catch (error) {
     res.status(500).send(error);
@@ -93,119 +86,89 @@ app.get("/participants", async (req, res) => {
 
 //// POST Messages
 app.post("/messages", async (req, res) => {
-  const { to, text, type } = req.body;
-  const user = req.headers.user;
-  console.log("user", user);
-
-  const validation = messageSchema.validate(
-    { to, text, type },
-    { abortEarly: false }
-  );
-  if (validation.error) {
-    const errors = validation.error.details.map((detail) => detail.message);
-    res.status(422).send(errors);
-    return;
-  }
-
-  // const userParticipant = isParticipantExists(user);
-  // console.log("userParticipant", userParticipant);
-  // if (!userParticipant) {
-  //   console.log("userParticipant", userParticipant);
-  //   res.status(409).send({ error: "Participante não existe!" });
-  //   return;
-  //   //409: Conflict => Significa que o recurso que você está tentando inserir já foi inserido
-  // }
-
-  const isParticipantExists =
-    (await db.collection("participants").find({ name: user }).toArray())
-      .length > 0;
-  console.log("isParticipantExists1", isParticipantExists);
-  if (!isParticipantExists) {
-    res.status(409).send({ error: "Participante não existe!" });
-    return;
-    //409: Conflict => Significa que o recurso que você está tentando inserir já foi inserido
-  }
-
   try {
-    await db.collection("messages").insert({
-      from: user,
-      to: to,
-      text: text,
-      type: type,
+    const validation = messageSchema.validate(req.body, opts);
+    if (validation)
+      return res
+        .status(422)
+        .send({ message: error.details.map((m) => m.message) });
+
+    const { to, text, type } = req.body;
+    const from = req.headers.user;
+
+    const userParticipant = await ehUsuarioParticipante(from);
+    if (!userParticipant)
+      return res
+        .status(422)
+        .send({ message: `Participante ${from} não existente` });
+
+    await batePapoCollection.insertOne({
+      from,
+      to,
+      text,
+      type,
       time: dayjs().format("HH:mm:ss"),
     });
-    res.sendStatus(201);
-  } catch (error) {
-    res.status(500).send(error);
+
+    return res.sendStatus(201);
+  } catch (erro) {
+    return res.status(500).send({ message: erro });
   }
 });
 
 //GET Messages
 app.get("/messages", async (req, res) => {
-  const limit = parseInt(req.query.limit);
-  const user = req.headers.user;
-
-  /*if (limit !== 0) {
-    const tenLastTweets = tweetsReturn.slice(-10)
-  } else {
-    try {
-      const messages = await db.collection("participants").find({from: user, to:user}).toArray()
-      res.send(messages);
-    } catch (error) {
-      res.status(500).send(error);
-    }
-  }*/
-
   try {
-    if (limit !== 0) {
-      const messagesActual = await db
-        .collection("participants")
-        .find({ from: user, to: user })
-        .toArray();
+    const limit = parseInt(req.query.limit || 0);
+    const from = req.headers.user;
 
-      const messages = messagesActual.slice(-limit);
-    } else {
-      const messages = await db
-        .collection("participants")
-        .find({ from: user, to: user })
-        .toArray();
-      //.reverse();
-    }
+    const agregacoes =
+      limit === 0
+        ? [
+            {
+              $match: {
+                $or: [{ to: from }, { from: from }, { type: "status" }],
+              },
+            },
+            {
+              $sort: { _id: -1 },
+            },
+          ]
+        : [
+            {
+              $match: {
+                $or: [{ to: from }, { from: from }, { type: "status" }],
+              },
+            },
+            {
+              $sort: { _id: -1 },
+            },
+            {
+              $limit: Math.abs(limit),
+            },
+          ];
+    const messages = (
+      await batePapoCollection.aggregate(agregacoes).toArray()
+    ).reverse();
 
-    res.send(messages);
-  } catch (error) {
-    res.status(500).send(error);
+    return res.status(200).send(messages);
+  } catch (erro) {
+    console.error(erro);
+    return res.status(500).send({ message: erro });
   }
-
-  // try {
-  //   const messages = await db
-  //     .collection("participants")
-  //     .find({ from: user, to: user })
-  //     .toArray()
-  //     .reverse();
-  //   res.send(messages);
-  // } catch (error) {
-  //   res.status(500).send(error);
-  // }
 });
 
 //POST /status
 app.post("/status", async (req, res) => {
   try {
-    const user = req.headers.user;
+    const { user } = req.headers;
+    const userParticipant = await ehUsuarioParticipante(user);
+    if (!userParticipant) return res.sendStatus(404);
 
-    const isParticipantExists =
-      (await db.collection("participants").find({ name: user }).toArray())
-        .length > 0;
-    console.log("isParticipantExists1", isParticipantExists);
-    if (!isParticipantExists) {
-      sendStatus(404);
-      return;
-    }
-
-    await db
-      .collection("participants")
-      .updateOne({ name: user }, { $set: { lastStatus: Date.now() } });
+    await participantsCollection.updateOne(
+      { name: user },
+      { $set: { lastStatus: Date.now() } }
+    );
 
     return res.sendStatus(200);
   } catch (erro) {
@@ -216,8 +179,7 @@ app.post("/status", async (req, res) => {
 //Remove users inativos
 async function removeParticipants() {
   try {
-    await db
-      .collection("participants")
+    await participantsCollection
       .aggregate([
         {
           $addFields: {
@@ -227,10 +189,8 @@ async function removeParticipants() {
       ])
       .forEach(async (participant) => {
         if (participant.tempo > 10000) {
-          await db
-            .collection("participants")
-            .deleteOne({ _id: participant._id });
-          await db.collection("messages").insertOne({
+          await participantsCollection.deleteOne({ _id: participant._id });
+          await batePapoCollection.insertOne({
             from: participant.name,
             to: "Todos",
             text: "sai da sala...",
@@ -245,6 +205,12 @@ async function removeParticipants() {
 }
 
 setInterval(removeParticipants, 15000);
+
+async function ehUsuarioParticipante(usuario) {
+  return (
+    (await participantsCollection.find({ name: usuario }).toArray()).length > 0
+  );
+}
 
 app.listen(5000, () => console.log("Server running in port 5000"));
 
