@@ -25,14 +25,14 @@ const participantsCollection = db.collection("participants");
 const batePapoCollection = db.collection("batepapo");
 
 //Modelo desejado para o participante e messages - o objeto recebe configurações do campo
-const participantSchema = joi.object({
+const validacoesParticipants = joi.object({
   name: joi.string().required(),
 });
 
-const messageSchema = joi.object({
+const validacoesMessages = joi.object({
   to: joi.string().required(),
   text: joi.string().required(),
-  type: joi.any().valid("message", "private_message"), // permite um ou outro
+  type: joi.any().valid("message", "private_message"),
 });
 
 //options método validate
@@ -44,17 +44,16 @@ app.post("/participants", async (req, res) => {
   try {
     const { name } = req.body;
 
-    const validation = participantSchema.validate({ name }, opts);
-    if (validation)
+    const { error, value } = validacoesParticipants.validate({ name }, opts);
+    if (error)
       return res
         .status(422)
         .send({ message: error.details.map((m) => m.message) });
     //422: Unprocessable Entity => Significa que a requisição enviada não está no formato esperado
 
     //verificar se já existe o usuário
-    const isParticipantExists = await participantsCollection.findOne({ name });
-    if (isParticipantExists)
-      return res.status(409).send({ error: "Participante já existe." });
+    const usuarioExiste = await participantsCollection.findOne({ name });
+    if (usuarioExiste) return res.sendStatus(409);
     //409: Conflict => Significa que o recurso que você está tentando inserir já foi inserido
 
     await participantsCollection.insertOne({ name, lastStatus: Date.now() });
@@ -87,8 +86,9 @@ app.get("/participants", async (req, res) => {
 //// POST Messages
 app.post("/messages", async (req, res) => {
   try {
-    const validation = messageSchema.validate(req.body, opts);
-    if (validation)
+    //validações
+    const { error, value } = validacoesMessages.validate(req.body, opts);
+    if (error)
       return res
         .status(422)
         .send({ message: error.details.map((m) => m.message) });
@@ -96,8 +96,8 @@ app.post("/messages", async (req, res) => {
     const { to, text, type } = req.body;
     const from = req.headers.user;
 
-    const userParticipant = await ehUsuarioParticipante(from);
-    if (!userParticipant)
+    const usuarioParticipante = await ehUsuarioParticipante(from);
+    if (!usuarioParticipante)
       return res
         .status(422)
         .send({ message: `Participante ${from} não existente` });
